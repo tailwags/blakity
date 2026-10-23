@@ -1,0 +1,66 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # Installs the nightly pinned in rust-toolchain.toml.
+      - name: Setup rust
+        run: rustup toolchain install
+
+      - name: Run tests
+        run: cargo test --no-fail-fast
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # --no-deps keeps clippy off the upstream path dev-dependencies.
+      - name: Check clippy
+        run: cargo clippy --all-targets --no-deps -- -Dwarnings
+
+      - name: Check docs
+        run: cargo doc --no-deps -p blakity
+        env:
+          RUSTDOCFLAGS: "-Dwarnings"
+
+  no-std:
+    name: Build for ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-uefi, aarch64-unknown-uefi, x86_64-unknown-none]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup rust
+        run: rustup toolchain install
+
+      - name: Build
+        run: cargo build --lib --release --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: "-Dwarnings"
+
+  msrv:
+    name: MSRV check (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup MSRV rust
+        run: rustup toolchain install 1.85 --profile minimal
+
+      # Only the library: the tests and benches need nightly.
+      - name: Check build with MSRV
+        run: cargo +1.85 check --lib
+        env:
+          RUSTFLAGS: "-Dwarnings"

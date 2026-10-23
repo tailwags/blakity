@@ -2,6 +2,16 @@
 name = "blakity"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+license = "CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception"
+authors = ["Matilde Morrone <contact@rosymati.com>"]
+description = "A tiny, portable, no_std BLAKE3, optimized for size and speed without SIMD"
+repository = "https://github.com/tailwags/blakity"
+documentation = "https://docs.rs/blakity"
+readme = "README.md"
+keywords = ["blake3", "hash", "no_std", "uefi", "crypto"]
+categories = ["cryptography", "no-std", "embedded"]
+include = ["/src/**/*.rs", "/README.md", "/LICENSE_*"]
 
 [dependencies]
 

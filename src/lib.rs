@@ -1,4 +1,35 @@
 #![no_std]
+#![deny(missing_docs)]
+
+//! **blakity** -- a tiny, portable BLAKE3.
+//!
+//! A `#![no_std]` [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) in a single
+//! file with no dependencies, derived from upstream's `reference_impl`. It
+//! targets small binaries (UEFI and other `no_std` builds) while staying faster
+//! than the reference implementation, without SIMD intrinsics or
+//! platform-specific code.
+//!
+//! The API is the same as upstream's `reference_impl`: a [`Hasher`] for the
+//! regular hash, the keyed hash and the key derivation function, whose
+//! [`finalize`](Hasher::finalize) fills an output slice of any length (the
+//! extendable output).
+//!
+//! # Example
+//!
+//! ```
+//! let mut hasher = blakity::Hasher::new();
+//! hasher.update(b"abc");
+//! hasher.update(b"def");
+//! let mut hash = [0; 32];
+//! hasher.finalize(&mut hash);
+//! let mut extended_hash = [0; 500];
+//! hasher.finalize(&mut extended_hash);
+//! assert_eq!(hash, extended_hash[..32]);
+//! ```
+//!
+//! # Cargo features
+//!
+//! No features are currently defined.
 
 use core::cmp::min;
 use core::mem::MaybeUninit;
