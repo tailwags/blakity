@@ -22,6 +22,7 @@ const IV: [u32; 8] = [
 const MSG_PERMUTATION: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
 
 // The mixing function, G, which mixes either a column or a diagonal.
+#[inline(always)]
 fn g(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, mx: u32, my: u32) {
     state[a] = state[a].wrapping_add(state[b]).wrapping_add(mx);
     state[d] = (state[d] ^ state[a]).rotate_right(16);
@@ -31,66 +32,6 @@ fn g(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, mx: u32, my:
     state[d] = (state[d] ^ state[a]).rotate_right(8);
     state[c] = state[c].wrapping_add(state[d]);
     state[b] = (state[b] ^ state[c]).rotate_right(7);
-}
-
-fn round(state: &mut [u32; 16], m: &[u32; 16]) {
-    // Mix the columns.
-    g(state, 0, 4, 8, 12, m[0], m[1]);
-    g(state, 1, 5, 9, 13, m[2], m[3]);
-    g(state, 2, 6, 10, 14, m[4], m[5]);
-    g(state, 3, 7, 11, 15, m[6], m[7]);
-    // Mix the diagonals.
-    g(state, 0, 5, 10, 15, m[8], m[9]);
-    g(state, 1, 6, 11, 12, m[10], m[11]);
-    g(state, 2, 7, 8, 13, m[12], m[13]);
-    g(state, 3, 4, 9, 14, m[14], m[15]);
-}
-
-fn permute(m: &mut [u32; 16]) {
-    let mut permuted = [0; 16];
-    for i in 0..16 {
-        permuted[i] = m[MSG_PERMUTATION[i]];
-    }
-    *m = permuted;
-}
-
-fn compress(
-    chaining_value: &[u32; 8],
-    block_words: &[u32; 16],
-    counter: u64,
-    block_len: u32,
-    flags: u32,
-) -> [u32; 16] {
-    let counter_low = counter as u32;
-    let counter_high = (counter >> 32) as u32;
-    #[rustfmt::skip]
-    let mut state = [
-        chaining_value[0], chaining_value[1], chaining_value[2], chaining_value[3],
-        chaining_value[4], chaining_value[5], chaining_value[6], chaining_value[7],
-        IV[0],             IV[1],             IV[2],             IV[3],
-        counter_low,       counter_high,      block_len,         flags,
-    ];
-    let mut block = *block_words;
-
-    round(&mut state, &block); // round 1
-    permute(&mut block);
-    round(&mut state, &block); // round 2
-    permute(&mut block);
-    round(&mut state, &block); // round 3
-    permute(&mut block);
-    round(&mut state, &block); // round 4
-    permute(&mut block);
-    round(&mut state, &block); // round 5
-    permute(&mut block);
-    round(&mut state, &block); // round 6
-    permute(&mut block);
-    round(&mut state, &block); // round 7
-
-    for i in 0..8 {
-        state[i] ^= state[i + 8];
-        state[i + 8] ^= chaining_value[i];
-    }
-    state
 }
 
 fn first_8_words(compression_output: [u32; 16]) -> [u32; 8] {
@@ -107,6 +48,8 @@ fn words_from_little_endian_bytes(bytes: &[u8], words: &mut [u32]) {
 // Each chunk or parent node can produce either an 8-word chaining value or, by
 // setting the ROOT flag, any number of final output bytes. The Output struct
 // captures the state just prior to choosing between those two possibilities.
+// It is also the input of the compression function.
+#[derive(Clone, Copy)]
 struct Output {
     input_chaining_value: [u32; 8],
     block_words: [u32; 16],
@@ -116,31 +59,57 @@ struct Output {
 }
 
 impl Output {
+    // The compression function. It stays out of line and takes its whole
+    // input through one pointer, so every call site is a short call.
+    #[inline(never)]
+    fn compress(&self) -> [u32; 16] {
+        let cv = &self.input_chaining_value;
+        #[rustfmt::skip]
+        let mut state = [
+            cv[0], cv[1], cv[2], cv[3], cv[4], cv[5], cv[6], cv[7],
+            IV[0], IV[1], IV[2], IV[3],
+            self.counter as u32, (self.counter >> 32) as u32, self.block_len, self.flags,
+        ];
+        let mut m = self.block_words;
+        for round in 0..7 {
+            // Mix the columns.
+            g(&mut state, 0, 4, 8, 12, m[0], m[1]);
+            g(&mut state, 1, 5, 9, 13, m[2], m[3]);
+            g(&mut state, 2, 6, 10, 14, m[4], m[5]);
+            g(&mut state, 3, 7, 11, 15, m[6], m[7]);
+            // Mix the diagonals.
+            g(&mut state, 0, 5, 10, 15, m[8], m[9]);
+            g(&mut state, 1, 6, 11, 12, m[10], m[11]);
+            g(&mut state, 2, 7, 8, 13, m[12], m[13]);
+            g(&mut state, 3, 4, 9, 14, m[14], m[15]);
+            // Permute the message words for the next round.
+            if round < 6 {
+                m = MSG_PERMUTATION.map(|i| m[i]);
+            }
+        }
+
+        for i in 0..8 {
+            state[i] ^= state[i + 8];
+            state[i + 8] ^= cv[i];
+        }
+        state
+    }
+
     fn chaining_value(&self) -> [u32; 8] {
-        first_8_words(compress(
-            &self.input_chaining_value,
-            &self.block_words,
-            self.counter,
-            self.block_len,
-            self.flags,
-        ))
+        first_8_words(self.compress())
     }
 
     fn root_output_bytes(&self, out_slice: &mut [u8]) {
-        let mut output_block_counter = 0;
+        let mut output = *self;
+        output.counter = 0;
+        output.flags |= ROOT;
         for out_block in out_slice.chunks_mut(2 * OUT_LEN) {
-            let words = compress(
-                &self.input_chaining_value,
-                &self.block_words,
-                output_block_counter,
-                self.block_len,
-                self.flags | ROOT,
-            );
+            let words = output.compress();
             // The output length might not be a multiple of 4.
             for (word, out_word) in words.iter().zip(out_block.chunks_mut(4)) {
                 out_word.copy_from_slice(&word.to_le_bytes()[..out_word.len()]);
             }
-            output_block_counter += 1;
+            output.counter += 1;
         }
     }
 }
@@ -180,42 +149,46 @@ impl ChunkState {
 
     fn update(&mut self, mut input: &[u8]) {
         while !input.is_empty() {
-            // If the block buffer is full, compress it and clear it. More
-            // input is coming, so this compression is not CHUNK_END.
-            if self.block_len as usize == BLOCK_LEN {
-                let mut block_words = [0; 16];
-                words_from_little_endian_bytes(&self.block, &mut block_words);
-                self.chaining_value = first_8_words(compress(
-                    &self.chaining_value,
-                    &block_words,
-                    self.chunk_counter,
-                    BLOCK_LEN as u32,
-                    self.flags | self.start_flag(),
-                ));
-                self.blocks_compressed += 1;
-                self.block = [0; BLOCK_LEN];
-                self.block_len = 0;
+            let block: &[u8; BLOCK_LEN];
+            if self.block_len == 0 && input.len() > BLOCK_LEN {
+                // A whole block with more input after it skips the buffer.
+                (block, input) = input.split_first_chunk().unwrap();
+            } else if self.block_len as usize == BLOCK_LEN {
+                // The buffer is full and more input is coming, so this
+                // compression is not CHUNK_END.
+                block = &self.block;
+            } else {
+                // Copy input bytes into the block buffer.
+                let want = BLOCK_LEN - self.block_len as usize;
+                let take = min(want, input.len());
+                self.block[self.block_len as usize..][..take].copy_from_slice(&input[..take]);
+                self.block_len += take as u8;
+                input = &input[take..];
+                continue;
             }
-
-            // Copy input bytes into the block buffer.
-            let want = BLOCK_LEN - self.block_len as usize;
-            let take = min(want, input.len());
-            self.block[self.block_len as usize..][..take].copy_from_slice(&input[..take]);
-            self.block_len += take as u8;
-            input = &input[take..];
+            self.chaining_value = self.block_output(block, BLOCK_LEN, 0).chaining_value();
+            self.blocks_compressed += 1;
+            self.block = [0; BLOCK_LEN];
+            self.block_len = 0;
         }
     }
 
-    fn output(&self) -> Output {
+    // `block` as a compression input of `block_len` bytes (the rest of it is
+    // zero), plus `end_flag`.
+    fn block_output(&self, block: &[u8; BLOCK_LEN], block_len: usize, end_flag: u32) -> Output {
         let mut block_words = [0; 16];
-        words_from_little_endian_bytes(&self.block, &mut block_words);
+        words_from_little_endian_bytes(block, &mut block_words);
         Output {
             input_chaining_value: self.chaining_value,
             block_words,
             counter: self.chunk_counter,
-            block_len: self.block_len as u32,
-            flags: self.flags | self.start_flag() | CHUNK_END,
+            block_len: block_len as u32,
+            flags: self.flags | self.start_flag() | end_flag,
         }
+    }
+
+    fn output(&self) -> Output {
+        self.block_output(&self.block, self.block_len as usize, CHUNK_END)
     }
 }
 
