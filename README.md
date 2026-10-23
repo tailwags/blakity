@@ -35,6 +35,16 @@ hasher.finalize(&mut hash);
 `Hasher::new_keyed(&[u8; 32])` gives the keyed hash and
 `Hasher::new_derive_key(context)` the key derivation function.
 
+For the common case, `blakity::hash` hashes a whole input into a `Hash`, which
+displays as lowercase hex and parses back with `Hash::from_hex`:
+
+```rust
+let hash = blakity::hash(b"abc");
+assert_eq!(blakity::Hash::from_hex(&hash.to_string()), Some(hash));
+```
+
+This is a small subset of the official crate's API, not a drop-in replacement.
+
 blakity has no SIMD and no multithreading, so for large inputs on a host with
 `std`, the official [`blake3`](https://crates.io/crates/blake3) crate is much
 faster.
@@ -60,10 +70,10 @@ hash crate at `opt-level = 3`, fat LTO. Run with `just size`.
 
 | target                           | blakity | reference_impl | blake3 (`pure`) | blake3 | C (portable) |
 | -------------------------------- | ------: | -------------: | --------------: | -----: | -----------: |
-| x86_64-unknown-uefi+SSE2 (bread) |   3,240 |          4,041 |          17,688 | 57,608 |       16,641 |
-| x86_64-unknown-uefi              |   3,392 |          4,461 |           9,852 | 58,460 |       15,681 |
-| aarch64-unknown-uefi             |   2,720 |          2,816 |           5,456 | 10,232 |       12,748 |
-| x86_64-unknown-none              |   3,358 |          4,304 |          12,229 | 58,582 |       15,663 |
+| x86_64-unknown-uefi+SSE2 (bread) |   3,256 |          4,041 |          17,688 | 57,608 |       16,641 |
+| x86_64-unknown-uefi              |   3,440 |          4,461 |           9,852 | 58,460 |       15,681 |
+| aarch64-unknown-uefi             |   2,656 |          2,816 |           5,456 | 10,232 |       12,748 |
+| x86_64-unknown-none              |   3,390 |          4,304 |          12,229 | 58,582 |       15,663 |
 
 ## Scope
 

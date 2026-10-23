@@ -256,3 +256,42 @@ fn test_fuzz_xof() {
         assert_eq!(expected[..output_len], out[..output_len]);
     }
 }
+
+#[test]
+fn test_compare_hash_and_hex() {
+    // Not upstream. `blakity::hash` and `blakity::Hash`'s hex conversions,
+    // against the `blake3` crate's.
+    let mut input_buf = [0; TEST_CASES_MAX];
+    paint_test_input(&mut input_buf);
+    for &case in TEST_CASES {
+        let input = &input_buf[..case];
+        let expected = blake3::hash(input);
+        let hash = blakity::hash(input);
+        assert_eq!(hash.as_bytes(), expected.as_bytes());
+
+        let hex = hash.to_string();
+        assert_eq!(hex, expected.to_hex().as_str());
+        assert_eq!(blakity::Hash::from_hex(&hex), Some(hash));
+        assert_eq!(blakity::Hash::from_hex(&hex.to_uppercase()), Some(hash));
+    }
+}
+
+#[test]
+fn test_from_hex_invalid() {
+    // Not upstream.
+    let valid = blakity::hash(b"").to_string();
+    assert!(blakity::Hash::from_hex(&valid).is_some());
+    assert!(blakity::Hash::from_hex("").is_none());
+    assert!(blakity::Hash::from_hex(&valid[1..]).is_none());
+    assert!(blakity::Hash::from_hex(&format!("{valid}0")).is_none());
+    // A non-hex character anywhere, including the ones that integer parsing
+    // accepts ('+') and a multibyte one that keeps the byte length at 64.
+    for bad in ["g", "+", " ", "é"] {
+        for at in [0, 31, 62] {
+            let mut hex = valid.clone();
+            hex.replace_range(at..at + bad.len(), bad);
+            assert_eq!(hex.len(), 64);
+            assert!(blakity::Hash::from_hex(&hex).is_none(), "{hex}");
+        }
+    }
+}

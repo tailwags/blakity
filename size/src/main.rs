@@ -17,11 +17,10 @@ const _: () = assert!(
 );
 
 cfg_select! {
+    // `blakity::hash` is what bread calls.
     feature = "impl-blakity" => {
         fn hash(input: &[u8], out: &mut [u8; 32]) {
-            let mut hasher = blakity::Hasher::new();
-            hasher.update(input);
-            hasher.finalize(out);
+            *out = *blakity::hash(input).as_bytes();
         }
     }
     feature = "impl-reference" => {

@@ -12,9 +12,17 @@
 //! The API is the same as upstream's `reference_impl`: a [`Hasher`] for the
 //! regular hash, the keyed hash and the key derivation function, whose
 //! [`finalize`](Hasher::finalize) fills an output slice of any length (the
-//! extendable output).
+//! extendable output). On top of it, [`hash`] hashes a whole input at once
+//! into a [`Hash`], which converts to and from hex.
 //!
-//! # Example
+//! # Examples
+//!
+//! ```
+//! let hash = blakity::hash(b"abc");
+//! let hex = "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85";
+//! assert_eq!(hash.to_string(), hex);
+//! assert_eq!(blakity::Hash::from_hex(hex), Some(hash));
+//! ```
 //!
 //! ```
 //! let mut hasher = blakity::Hasher::new();
@@ -31,8 +39,11 @@
 //!
 //! No features are currently defined.
 
-use core::cmp::min;
-use core::mem::MaybeUninit;
+use core::{
+    cmp::min,
+    fmt::{self, Write},
+    mem::MaybeUninit,
+};
 
 const OUT_LEN: usize = 32;
 const KEY_LEN: usize = 32;
@@ -365,4 +376,56 @@ impl Hasher {
         }
         output.root_output_bytes(out_slice);
     }
+}
+
+/// A 32-byte BLAKE3 output, as returned by [`hash`].
+///
+/// It displays as lowercase hex. Equality compares the bytes directly and is
+/// not constant-time, so don't use it to check a secret keyed hash (a MAC).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hash([u8; OUT_LEN]);
+
+impl Hash {
+    /// The raw bytes of the hash.
+    pub fn as_bytes(&self) -> &[u8; OUT_LEN] {
+        &self.0
+    }
+
+    /// Parses a hash from exactly 64 hex digits, in either case.
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        fn nibble(c: u8) -> Option<u8> {
+            (c as char).to_digit(16).map(|d| d as u8)
+        }
+
+        let hex = hex.as_bytes();
+        if hex.len() != 2 * OUT_LEN {
+            return None;
+        }
+        let mut bytes = [0; OUT_LEN];
+        for (byte, pair) in bytes.iter_mut().zip(hex.chunks_exact(2)) {
+            *byte = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+        }
+        Some(Self(bytes))
+    }
+}
+
+impl fmt::Display for Hash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        for byte in self.0 {
+            f.write_char(DIGITS[usize::from(byte >> 4)].into())?;
+            f.write_char(DIGITS[usize::from(byte & 0xf)].into())?;
+        }
+        Ok(())
+    }
+}
+
+/// Hashes `input` with the regular hash function: a new [`Hasher`], one
+/// `update` and a 32-byte `finalize`.
+pub fn hash(input: &[u8]) -> Hash {
+    let mut hasher = Hasher::new();
+    hasher.update(input);
+    let mut out = [0; OUT_LEN];
+    hasher.finalize(&mut out);
+    Hash(out)
 }
