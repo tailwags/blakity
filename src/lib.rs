@@ -1,6 +1,7 @@
 #![no_std]
 
 use core::cmp::min;
+use core::mem::MaybeUninit;
 
 const OUT_LEN: usize = 32;
 const KEY_LEN: usize = 32;
@@ -148,14 +149,19 @@ impl ChunkState {
     }
 
     fn update(&mut self, mut input: &[u8]) {
+        // The caller never passes more than the rest of the chunk, so its last
+        // block always stays in the buffer for `output` to compress as
+        // CHUNK_END.
+        debug_assert!(input.len() <= CHUNK_LEN - self.len());
         while !input.is_empty() {
             let block: &[u8; BLOCK_LEN];
             if self.block_len == 0 && input.len() > BLOCK_LEN {
                 // A whole block with more input after it skips the buffer.
                 (block, input) = input.split_first_chunk().unwrap();
-            } else if self.block_len as usize == BLOCK_LEN {
+            } else if self.block_len as usize >= BLOCK_LEN {
                 // The buffer is full and more input is coming, so this
-                // compression is not CHUNK_END.
+                // compression is not CHUNK_END. (`>=` proves `block_len <
+                // BLOCK_LEN` below, which removes the copy's panic path.)
                 block = &self.block;
             } else {
                 // Copy input bytes into the block buffer.
@@ -223,8 +229,8 @@ fn parent_cv(
 pub struct Hasher {
     chunk_state: ChunkState,
     key_words: [u32; 8],
-    cv_stack: [[u32; 8]; 54], // Space for 54 subtree chaining values:
-    cv_stack_len: u8,         // 2^54 * CHUNK_LEN = 2^64
+    cv_stack: [MaybeUninit<[u32; 8]>; 54], // Space for 54 subtree chaining values:
+    cv_stack_len: u8,                      // 2^54 * CHUNK_LEN = 2^64
     flags: u32,
 }
 
@@ -233,7 +239,7 @@ impl Hasher {
         Self {
             chunk_state: ChunkState::new(key_words, 0, flags),
             key_words,
-            cv_stack: [[0; 8]; 54],
+            cv_stack: [MaybeUninit::uninit(); 54],
             cv_stack_len: 0,
             flags,
         }
@@ -263,16 +269,6 @@ impl Hasher {
         Self::new_internal(context_key_words, DERIVE_KEY_MATERIAL)
     }
 
-    fn push_stack(&mut self, cv: [u32; 8]) {
-        self.cv_stack[self.cv_stack_len as usize] = cv;
-        self.cv_stack_len += 1;
-    }
-
-    fn pop_stack(&mut self) -> [u32; 8] {
-        self.cv_stack_len -= 1;
-        self.cv_stack[self.cv_stack_len as usize]
-    }
-
     // Section 5.1.2 of the BLAKE3 spec explains this algorithm in more detail.
     fn add_chunk_chaining_value(&mut self, mut new_cv: [u32; 8], mut total_chunks: u64) {
         // This chunk might complete some subtrees. For each completed subtree,
@@ -282,11 +278,27 @@ impl Hasher {
         // with the result. After all these merges, push the final value of
         // `new_cv` onto the stack. The number of completed subtrees is given
         // by the number of trailing 0-bits in the new total number of chunks.
+        //
+        // The stack is only reached through `get`/`get_mut`, so there is no
+        // panic path. Neither `None` happens below the spec's 2^64-byte input
+        // limit; past it the hash is undefined anyway, and a full stack just
+        // drops the new entry.
+        debug_assert!(total_chunks.trailing_zeros() <= self.cv_stack_len as u32);
+        let mut len = self.cv_stack_len as usize;
         while total_chunks & 1 == 0 {
-            new_cv = parent_cv(self.pop_stack(), new_cv, self.key_words, self.flags);
+            len = len.wrapping_sub(1);
+            let Some(left_cv) = self.cv_stack.get(len) else {
+                break;
+            };
+            // SAFETY: entries below `cv_stack_len` are initialized.
+            let left_cv = unsafe { left_cv.assume_init() };
+            new_cv = parent_cv(left_cv, new_cv, self.key_words, self.flags);
             total_chunks >>= 1;
         }
-        self.push_stack(new_cv);
+        if let Some(top) = self.cv_stack.get_mut(len) {
+            top.write(new_cv);
+            self.cv_stack_len = len as u8 + 1;
+        }
     }
 
     /// Add input to the hash state. This can be called any number of times.
@@ -315,15 +327,10 @@ impl Hasher {
         // parent chaining values along the right edge of the tree, until we
         // have the root Output.
         let mut output = self.chunk_state.output();
-        let mut parent_nodes_remaining = self.cv_stack_len as usize;
-        while parent_nodes_remaining > 0 {
-            parent_nodes_remaining -= 1;
-            output = parent_output(
-                self.cv_stack[parent_nodes_remaining],
-                output.chaining_value(),
-                self.key_words,
-                self.flags,
-            );
+        for left_cv in self.cv_stack.iter().take(self.cv_stack_len as usize).rev() {
+            // SAFETY: entries below `cv_stack_len` are initialized.
+            let left_cv = unsafe { left_cv.assume_init() };
+            output = parent_output(left_cv, output.chaining_value(), self.key_words, self.flags);
         }
         output.root_output_bytes(out_slice);
     }
