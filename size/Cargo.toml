@@ -1,0 +1,58 @@
+# Binary-size harness: how many bytes does each BLAKE3 implementation add to a
+# no_std binary? See README.md; run ./measure.sh.
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "hashsize"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "hashsize"
+path = "src/main.rs"
+test = false
+bench = false
+
+[features]
+# At most one impl-* feature, or none for the baseline.
+impl-blakity = ["dep:blakity"]
+impl-reference = ["dep:upstream", "upstream/reference"]
+impl-blake3 = ["dep:blake3"]
+impl-blake3-pure = ["impl-blake3", "blake3/pure"]
+impl-c = ["dep:upstream", "upstream/c"]
+
+[dependencies]
+blakity = { path = "..", optional = true }
+upstream = { path = "upstream", optional = true }
+blake3 = { version = "=1.8.7", default-features = false, optional = true }
+
+[workspace]
+
+# Base for the sweep: an optimized size build like bread's. measure.sh varies
+# `lto` and `opt-level` on top of it with `--config profile.size.*`.
+[profile.size]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+trim-paths = "all"
+
+# bread's exact release profile (bread/Cargo.toml): z overall, the hash crate at
+# opt-level 3, plus bread's profile rustflags. Each implementation's crate
+# stands in for `blake3` when it is the one under test.
+[profile.bread]
+inherits = "size"
+rustflags = ["-Zfmt-debug=none", "-Cllvm-args=-enable-machine-outliner=always"]
+
+[profile.bread.package.blake3]
+opt-level = 3
+
+[profile.bread.package.blakity]
+opt-level = 3
+
+[profile.bread.package.upstream]
+opt-level = 3

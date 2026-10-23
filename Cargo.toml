@@ -4,3 +4,34 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[dev-dependencies]
+# Upstream BLAKE3 (the `upstream` submodule, pinned to f55849f) for tests and benches.
+blake3 = "1.8.7"
+blake3_c_rust_bindings = { path = "upstream/c/blake3_c_rust_bindings" }
+reference_impl = { path = "upstream/reference_impl" }
+chacha20 = "0.10.0"
+hex = "0.4.2"
+page_size = "0.6.0"
+rand = "0.10.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.107"
+
+# The path dependencies under upstream/ join the workspace on their own.
+[workspace]
+exclude = ["size"]
+
+# panic = "abort" is omitted: the libtest bench harness needs unwinding.
+[profile.release]
+opt-level = 3
+debug = false
+lto = "fat"
+codegen-units = 1
+
+# The bench profile inherits all of the above from release.
+
+# `cargo test`: optimized, but keeping dev's debug assertions and overflow
+# checks, without LTO and with parallel codegen so rebuilds stay quick.
+[profile.test]
+opt-level = 3
+debug = false

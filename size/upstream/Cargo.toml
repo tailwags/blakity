@@ -1,0 +1,17 @@
+[package]
+name = "upstream"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"
+test = false
+bench = false
+
+[features]
+reference = []
+c = []
+
+[build-dependencies]
+cc = "1.2"

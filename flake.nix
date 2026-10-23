@@ -31,10 +31,16 @@
               cargo-edit
               cargo-expand
               cargo-bloat
-              (rust-bin.stable.latest.default.override {
-                extensions = [ "rust-src" "rust-analyzer" ];
-              })
+              just
+              (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
             ];
+            # The C bindings build unoptimized in dev; fortify only warns there.
+            hardeningDisable = [ "fortify" ];
+            # For size/measure.sh: llvm-size reads PE and ELF for every arch, and
+            # an unwrapped clang builds C for the COFF/ELF cross targets (the
+            # wrapped one adds host hardening flags that break them).
+            LLVM_SIZE = lib.getExe' pkgs.llvmPackages.llvm "llvm-size";
+            HASHSIZE_CC = lib.getExe' pkgs.llvmPackages.clang-unwrapped "clang";
           };
         }
       );
